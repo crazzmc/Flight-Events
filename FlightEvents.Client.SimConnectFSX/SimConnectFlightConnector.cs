@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.FlightSimulator.SimConnect;
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Serialization;
@@ -92,6 +93,8 @@ namespace FlightEvents.Client.SimConnectFSX
             simconnect.OnRecvEvent += Simconnect_OnRecvEvent;
 
             simconnect.OnRecvSystemState += Simconnect_OnRecvSystemState;
+
+            simconnect.OnRecvAirportList += Simconnect_OnRecvAirportList;
         }
 
         public void Send(string message)
@@ -114,6 +117,8 @@ namespace FlightEvents.Client.SimConnectFSX
             {
                 if (simconnect != null)
                 {
+                    simconnect.UnsubscribeToFacilities(SIMCONNECT_FACILITY_LIST_TYPE.AIRPORT);
+
                     // Dispose serves the same purpose as SimConnect_Close()
                     simconnect.Dispose();
                     simconnect = null;
@@ -150,7 +155,7 @@ namespace FlightEvents.Client.SimConnectFSX
 
             return flightPlanTcs.Task;
         }
-
+        
         public Task<AircraftData> RequestAircraftDataAsync(CancellationToken cancellationToken = default)
         {
             if (aircraftDataTcs != null)
@@ -453,7 +458,7 @@ namespace FlightEvents.Client.SimConnectFSX
             }
         }
 
-        void Simconnect_OnRecvEvent(SimConnect sender, SIMCONNECT_RECV_EVENT data)
+        private void Simconnect_OnRecvEvent(SimConnect sender, SIMCONNECT_RECV_EVENT data)
         {
             logger.LogInformation("OnRecvEvent dwID " + data.dwID + " uEventID " + data.uEventID);
             switch ((SIMCONNECT_RECV_ID)data.dwID)
@@ -521,22 +526,36 @@ namespace FlightEvents.Client.SimConnectFSX
             }
         }
 
-        void Simconnect_OnRecvOpen(SimConnect sender, SIMCONNECT_RECV_OPEN data)
+        private void Simconnect_OnRecvAirportList(SimConnect sender, SIMCONNECT_RECV_AIRPORT_LIST data)
+        {
+            logger.LogDebug("Received Airport List");
+
+            var airports = data.rgData.Cast<SIMCONNECT_DATA_FACILITY_AIRPORT>().Select(airport => new Airport
+            {
+                Ident = airport.Icao,
+                Latitude = airport.Latitude,
+                Longitude = airport.Longitude,
+                Elevation = airport.Altitude
+            });
+        }
+
+        private void Simconnect_OnRecvOpen(SimConnect sender, SIMCONNECT_RECV_OPEN data)
         {
             logger.LogInformation("Connected to Flight Simulator");
 
             simconnect.RequestDataOnSimObject(DATA_REQUESTS.FLIGHT_STATUS, DEFINITIONS.FlightStatus, 0, SIMCONNECT_PERIOD.SIM_FRAME, SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, 0, 0);
+            simconnect.SubscribeToFacilities(SIMCONNECT_FACILITY_LIST_TYPE.AIRPORT, DATA_REQUESTS.SUBSCRIBE_GENERIC);
         }
 
         // The case where the user closes Flight Simulator
-        void Simconnect_OnRecvQuit(SimConnect sender, SIMCONNECT_RECV data)
+        private void Simconnect_OnRecvQuit(SimConnect sender, SIMCONNECT_RECV data)
         {
             logger.LogInformation("Flight Simulator has exited");
             Closed?.Invoke(this, new EventArgs());
             CloseConnection();
         }
 
-        void Simconnect_OnRecvException(SimConnect sender, SIMCONNECT_RECV_EXCEPTION data)
+        private void Simconnect_OnRecvException(SimConnect sender, SIMCONNECT_RECV_EXCEPTION data)
         {
             logger.LogError("Exception received: {error}", (SIMCONNECT_EXCEPTION)data.dwException);
         }
