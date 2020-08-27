@@ -32,6 +32,12 @@ interface State {
     mapTileType: MapTileType;
 
     movingPosition: MapPosition | null;
+
+    aircraftGroup: string | null
+}
+
+function delay(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export class Home extends React.Component<any, State> {
@@ -62,7 +68,8 @@ export class Home extends React.Component<any, State> {
             isDark: pref ? pref.isDark : false,
             map3D: pref ? pref.map3D : false,
             mapTileType: pref ? pref.mapTileType : MapTileType.OpenStreetMap,
-            movingPosition: null
+            movingPosition: null,
+            aircraftGroup: null
         }
 
         this.map = !this.state.map3D ? new LeafletMap() : new MaptalksMap();
@@ -90,6 +97,9 @@ export class Home extends React.Component<any, State> {
         this.handleFlightPlansLoaded = this.handleFlightPlansLoaded.bind(this);
         this.handleTeleportCompleted = this.handleTeleportCompleted.bind(this);
 
+        this.handleJoinAircraftGroup = this.handleJoinAircraftGroup.bind(this);
+        this.handleLeaveAircraftGroup = this.handleLeaveAircraftGroup.bind(this);
+
         this.cleanUp = this.cleanUp.bind(this);
     }
 
@@ -101,7 +111,12 @@ export class Home extends React.Component<any, State> {
         hub.onreconnected(async connectionId => {
             console.log('Connected to SignalR with connection ID ' + connectionId);
 
-            await hub.send('Join', 'Map');
+            if (this.state.aircraftGroup) {
+                await hub.send('Leave', 'Map');
+                await hub.send('Join', 'Map:' + this.state.aircraftGroup);
+            } else {
+                await hub.send('Join', 'Map');
+            }
         })
 
         hub.on("UpdateATC", (clientId, status: ATCStatus, atc: ATCInfo) => {
@@ -146,9 +161,9 @@ export class Home extends React.Component<any, State> {
                 };
 
                 if (aircraftStatus.isReady) {
-                    this.map.moveMarker(clientId, aircraftStatus, 
-                        this.state.myClientId === clientId, 
-                        this.state.followingClientId === clientId, 
+                    this.map.moveMarker(clientId, aircraftStatus,
+                        this.state.myClientId === clientId,
+                        this.state.followingClientId === clientId,
                         this.state.flightPlanClientId === clientId,
                         this.state.moreInfoClientIds.includes(clientId),
                         this.state.showPathClientIds.includes(clientId));
@@ -363,16 +378,54 @@ export class Home extends React.Component<any, State> {
         });
     }
 
-    public handleAirportsLoaded(airports: Airport[]) {
+    private handleAirportsLoaded(airports: Airport[]) {
         this.map.drawAirports(airports);
     }
 
-    public handleFlightPlansLoaded(flightPlans: FlightPlan[]) {
+    private handleFlightPlansLoaded(flightPlans: FlightPlan[]) {
         this.map.drawFlightPlans(flightPlans.map(o => o.data));
     }
 
-    public handleTeleportCompleted() {
+    private handleTeleportCompleted() {
         this.setState({ movingPosition: null });
+    }
+
+    private async handleJoinAircraftGroup(aircraftGroup: string) {
+        await this.hub.send("Leave", "Map");
+
+        this.setState({
+            aircraftGroup: aircraftGroup,
+            myClientId: null,
+            followingClientId: null
+        });
+
+        await delay(2000);
+
+        this.map.cleanUpAllAircraft();
+        this.setState({
+            aircrafts: {}
+        })
+        this.aircrafts = {};
+
+        await this.hub.send("Join", "Map:" + aircraftGroup);
+    }
+
+    private async handleLeaveAircraftGroup(aircraftGroup: string) {
+        await this.hub.send("Leave", "Map:" + aircraftGroup);
+
+        this.setState({
+            aircraftGroup: null,
+            myClientId: null,
+            followingClientId: null
+        });
+
+        this.map.cleanUpAllAircraft();
+        this.setState({
+            aircrafts: {}
+        })
+        this.aircrafts = {};
+
+        await this.hub.send("Join", "Map");
     }
 
     render() {
@@ -401,6 +454,7 @@ export class Home extends React.Component<any, State> {
                 flightPlanClientId={this.state.flightPlanClientId}
                 onShowPathChanged={this.handleShowPathChanged} showPathClientIds={this.state.showPathClientIds}
                 onMoreInfoChanged={this.handleMoreInfoChanged} moreInfoClientIds={this.state.moreInfoClientIds}
+                onJoinAircraftGroup={this.handleJoinAircraftGroup} onLeaveAircraftGroup={this.handleLeaveAircraftGroup}
             />
 
             <EventList onAirportsLoaded={this.handleAirportsLoaded} onFlightPlansLoaded={this.handleFlightPlansLoaded} />

@@ -13,6 +13,7 @@ namespace FlightEvents.Web.Hubs
     {
         public static ConcurrentDictionary<string, string> ConnectionIdToClientIds => connectionIdToClientIds;
         public static ConcurrentDictionary<string, AircraftStatus> ConnectionIdToAircraftStatuses => connectionIdToAircraftStatuses;
+        public static ConcurrentDictionary<string, string> ClientIdToAircraftGroup => clientIdToAircraftGroup;
 
         private static readonly ConcurrentDictionary<string, string> connectionIdToClientIds = new ConcurrentDictionary<string, string>();
         private static readonly ConcurrentDictionary<string, string> clientIdToConnectionIds = new ConcurrentDictionary<string, string>();
@@ -25,6 +26,8 @@ namespace FlightEvents.Web.Hubs
 
         private static readonly ConcurrentDictionary<string, (string, AircraftPosition)> connectionIdToTeleportRequest = new ConcurrentDictionary<string, (string, AircraftPosition)>();
         private static readonly ConcurrentDictionary<string, string> teleportTokenToConnectionId = new ConcurrentDictionary<string, string>();
+
+        private static readonly ConcurrentDictionary<string, string> clientIdToAircraftGroup = new ConcurrentDictionary<string, string>();
 
         private readonly IDiscordConnectionStorage discordConnectionStorage;
 
@@ -65,9 +68,13 @@ namespace FlightEvents.Web.Hubs
 
         public override async Task OnDisconnectedAsync(Exception exception)
         {
+            // Note: cache based on clientId is removed here, 
+            // but there has to be a recovery mechanism in OnConnectedAsync to handle reconnect
+
             if (connectionIdToClientIds.TryRemove(Context.ConnectionId, out var clientId))
             {
                 clientIdToConnectionIds.TryRemove(clientId, out _);
+                clientIdToAircraftGroup.TryRemove(clientId, out _);
                 await Clients.Groups("Map", "ATC").UpdateATC(clientId, null, null);
             }
             RemoveCacheOnConnectionId(Context.ConnectionId);
@@ -98,6 +105,21 @@ namespace FlightEvents.Web.Hubs
                 }
 
                 await Clients.Groups("Map").UpdateATC(clientId, status, atc);
+            }
+        }
+
+        public void LoginAircraft(AircraftLoginInfo aircraft)
+        {
+            if (connectionIdToClientIds.TryGetValue(Context.ConnectionId, out var clientId))
+            {
+                if (!string.IsNullOrEmpty(aircraft.AircraftGroup))
+                {
+                    clientIdToAircraftGroup[clientId] = aircraft.AircraftGroup;
+                }
+                else
+                {
+                    clientIdToAircraftGroup.TryRemove(clientId, out _);
+                }
             }
         }
 
@@ -138,7 +160,7 @@ namespace FlightEvents.Web.Hubs
             var clientIds = await discordConnectionStorage.GetClientIdsAsync(discordUserId);
             foreach (var clientId in clientIds)
             {
-                if (clientIdToConnectionIds.TryGetValue(clientId, out var connectionId) && 
+                if (clientIdToConnectionIds.TryGetValue(clientId, out var connectionId) &&
                     connectionIdToAircraftStatuses.TryGetValue(connectionId, out var status))
                 {
                     await Clients.Caller.UpdateAircraftToDiscord(discordUserId, clientId, status);
@@ -225,6 +247,18 @@ namespace FlightEvents.Web.Hubs
         public async Task Join(string group)
         {
             await Groups.AddToGroupAsync(Context.ConnectionId, group);
+            if (connectionIdToClientIds.TryGetValue(Context.ConnectionId, out var clientId))
+            {
+                if (clientIdToAircraftGroup.TryGetValue(clientId, out var aircraftGroup))
+                {
+                    switch (group)
+                    {
+                        case "ClientMap":
+                            await Groups.AddToGroupAsync(Context.ConnectionId, "ClientMap:" + aircraftGroup);
+                            break;
+                    }
+                }
+            }
         }
 
         public async Task Leave(string group)
